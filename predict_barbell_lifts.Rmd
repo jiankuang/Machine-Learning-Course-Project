@@ -1,0 +1,81 @@
+## load data
+```{r}
+pml_training <- read.csv("data/pml-training.csv", na.strings = c("NA","")) # set "" equal to NA
+pml_testing <- read.csv("data/pml-testing.csv", na.strings = c("NA",""))
+head(pml_training[,1:15])
+str(pml_training[,1:15])
+summary(pml_training$classe)
+```
+
+## remove Unnecessary  columns
+remove NA columns
+```{r}
+removeNACols <- function(df, threshold=0.8) {
+    df[, colSums(is.na(df)) / nrow(df) < threshold]
+}
+pml_training <- removeNACols(pml_training)
+pml_testing <- removeNACols(pml_testing)
+```
+
+remove `X` column on both data set, and `problem_id` column on test data set  
+add `classe` column on test data set
+```{r}
+pml_training <- subset(pml_training, select = -c(X))
+pml_testing <- subset(pml_testing, select = -c(X, problem_id))
+pml_testing$classe <- factor(x = c("A", "B", "C", "D", "E"))
+```
+
+## choose the best predictors
+```{r}
+# leaps is a package using Subset Selection Methods (like Best Subset Selection, Forward and Backward Stepwise Selection)
+# to select the best predictors
+library(leaps) 
+# There is no predict() method for regsubsets() in leaps package, we can write our own predict method.
+# object: the model we build from regsubsets() function
+# id: the number of predictors
+predict.regsubsets = function(object, newdata, id, ...) {
+    form = as.formula(object$call[[2]])
+    mat = model.matrix(form, newdata)
+    coefi = coef(object, id=id)
+    xvars = names(coefi)
+    mat[,xvars] %*% coefi
+}
+```
+
+### use k-fold cross validation 
+```{r, message=FALSE, warning=FALSE}
+k = 10 # k-fold
+set.seed(1)
+folds = sample(1:k, nrow(pml_training), replace = TRUE)
+cv.errors = matrix(NA, k, 19, dimnames = list(NULL, paste(1:19)))
+# In the jth fold, the elements of folds that equal j are in the test set, and the remainder are in the training set.
+for(j in 1:k) {
+    best.fit = regsubsets(classe~., data = pml_training[folds!=j,], nvmax = 19, method = "forward")
+    for(i in 1:19) {
+        pred = predict(best.fit, pml_training[folds==j,], id=i)
+        # '-' not meaningful for factors, so as.numeric
+        cv.errors[j,i] = mean((as.numeric(pml_training$classe[folds==j]) - pred)^2)
+    }
+}
+mean.cv.errors = apply(cv.errors, 2, mean)
+mean.cv.errors
+par(mfrow=c(1,1))
+plot(mean.cv.errors, type = "b")
+```
+
+We see that cross-validation selects an 6-variable model. The expected out of sample error is `0.158`.  
+We now perform Forward Stepwise Selection on the full data set in order to obtain the 6-variable model.
+```{r}
+reg.best = regsubsets(classe~., data = pml_training, nvmax = 19, method = "forward")
+coef(reg.best, 6)
+```
+
+Because `user_name` is factor, there are only two variables as predictors: `user_name` and `raw_timestamp_part_1`
+
+## Predict on Test Data
+```{r, warning=FALSE}
+library(caret)
+lda.fit <- train(classe ~ ., data = pml_training, method="lda")
+lda.pred = predict(lda.fit, pml_testing)
+lda.pred
+```
